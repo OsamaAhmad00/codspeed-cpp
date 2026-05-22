@@ -59,30 +59,8 @@ static std::string escape_backslashes(const std::string &input) {
   return output;
 }
 
-static void write_codspeed_benchmarks_to_json(
-    const std::vector<CodspeedWalltimeBenchmark> &benchmarks) {
+static std::string serialize_benchmark_objects(const std::vector<CodspeedWalltimeBenchmark> &benchmarks) {
   std::ostringstream oss;
-
-  std::string creator_name = "codspeed-cpp";
-  std::string creator_version = CODSPEED_VERSION;
-#ifdef _WIN32
-  auto creator_pid = _getpid();
-#else
-  pid_t creator_pid = getpid();
-#endif
-  std::string instrument_type = "walltime";
-
-  oss << "{\n";
-  oss << "  \"creator\": {\n";
-  oss << "    \"name\": \"" << creator_name << "\",\n";
-  oss << "    \"version\": \"" << creator_version << "\",\n";
-  oss << "    \"pid\": " << creator_pid << "\n";
-  oss << "  },\n";
-  oss << "  \"instrument\": {\n";
-  oss << "    \"type\": \"" << instrument_type << "\"\n";
-  oss << "  },\n";
-  oss << "  \"benchmarks\": [\n";
-
   for (size_t i = 0; i < benchmarks.size(); ++i) {
     const auto &benchmark = benchmarks[i];
     const auto &stats = benchmark.stats;
@@ -122,9 +100,16 @@ static void write_codspeed_benchmarks_to_json(
     }
     oss << "\n";
   }
+  return oss.str();
+}
 
-  oss << "  ]\n";
-  oss << "}";
+// Extracts the file path calculation and directory creation to avoid redundancy
+static std::string get_codspeed_results_file_path() {
+#ifdef _WIN32
+  auto creator_pid = _getpid();
+#else
+  pid_t creator_pid = getpid();
+#endif
 
   // Determine the directory path
   std::string profile_folder = safe_getenv("CODSPEED_PROFILE_FOLDER");
@@ -135,23 +120,144 @@ static void write_codspeed_benchmarks_to_json(
   if (!std::filesystem::exists(results_path)) {
     if (!std::filesystem::create_directories(results_path)) {
       std::cerr << "Failed to create directory: " << results_path << std::endl;
-      return;
+      return "";
     }
   }
 
   // Create the file path
   std::ostringstream file_path;
   file_path << results_path.string() << "/" << creator_pid << ".json";
+  return file_path.str();
+}
+
+static void write_codspeed_benchmarks_to_json(
+    const std::vector<CodspeedWalltimeBenchmark> &benchmarks) {
+  std::ostringstream oss;
+
+  std::string creator_name = "codspeed-cpp";
+  std::string creator_version = CODSPEED_VERSION;
+#ifdef _WIN32
+  auto creator_pid = _getpid();
+#else
+  pid_t creator_pid = getpid();
+#endif
+  std::string instrument_type = "walltime";
+
+  oss << "{\n";
+  oss << "  \"creator\": {\n";
+  oss << "    \"name\": \"" << creator_name << "\",\n";
+  oss << "    \"version\": \"" << creator_version << "\",\n";
+  oss << "    \"pid\": " << creator_pid << "\n";
+  oss << "  },\n";
+  oss << "  \"instrument\": {\n";
+  oss << "    \"type\": \"" << instrument_type << "\"\n";
+  oss << "  },\n";
+  oss << "  \"benchmarks\": [\n";
+
+  oss << serialize_benchmark_objects(benchmarks);
+
+  oss << "  ]\n";
+  oss << "}";
+
+  std::string file_path_str = get_codspeed_results_file_path();
+  if (file_path_str.empty()) return;
 
   // Write to file
-  std::ofstream out_file(file_path.str());
+  std::ofstream out_file(file_path_str);
   if (out_file.is_open()) {
     out_file << oss.str();
     out_file.close();
-    std::cout << "JSON written to " << file_path.str() << std::endl;
+    std::cout << "JSON written to " << file_path_str << std::endl;
   } else {
-    std::cerr << "Unable to open file " << file_path.str() << std::endl;
+    std::cerr << "Unable to open file " << file_path_str << std::endl;
   }
+}
+
+static void append_codspeed_benchmarks_to_json(
+  const std::vector<CodspeedWalltimeBenchmark> &benchmarks) {
+
+  if (benchmarks.empty()) return;
+
+  std::string file_path_str = get_codspeed_results_file_path();
+  if (file_path_str.empty()) return;
+
+  if (!std::filesystem::exists(file_path_str) || std::filesystem::file_size(file_path_str) == 0) {
+    write_codspeed_benchmarks_to_json(benchmarks);
+    return;
+  }
+
+  std::fstream file(file_path_str, std::ios::in | std::ios::out | std::ios::binary);
+  if (!file) {
+    std::cerr << "Failed to open file for appending: " << file_path_str << std::endl;
+    return;
+  }
+
+  file.seekp(0, std::ios::end);
+  std::streampos pos = file.tellp();
+
+  int state = 0;
+  bool array_was_empty = false;
+  std::streampos truncation_pos = 0;
+
+  while (pos > 0) {
+    pos -= 1;
+    file.seekg(pos);
+    char ch;
+    file.get(ch);
+
+    // State 0: Skip trailing whitespace outside the root object, find '}'
+    if (state == 0) {
+      if (std::isspace(static_cast<unsigned char>(ch))) continue;
+      if (ch == '}') {
+        state = 1;
+        continue;
+      }
+    }
+
+    // State 1: Skip whitespace between '}' and ']', find ']'
+    if (state == 1) {
+      if (std::isspace(static_cast<unsigned char>(ch))) continue;
+      if (ch == ']') {
+        state = 2;
+        continue;
+      }
+    }
+
+    // State 2: We are inside the array. Skip whitespace to find the actual content end
+    if (state == 2) {
+      if (std::isspace(static_cast<unsigned char>(ch))) {
+        continue;
+      }
+
+      if (ch == '[') {
+        array_was_empty = true;
+      }
+
+      truncation_pos = pos + std::streamoff(1);
+      break;
+    }
+  }
+
+  if (state < 2) {
+    std::cerr << "Failed to find valid JSON structural endings to safely append." << std::endl;
+    return;
+  }
+
+  file.seekp(truncation_pos);
+
+  if (!array_was_empty) {
+    file << ",\n";
+  } else {
+    file << "\n";
+  }
+
+  // Inject the new items
+  file << serialize_benchmark_objects(benchmarks);
+
+  file << "  ]\n}";
+
+  file.flush();
+  std::filesystem::resize_file(file_path_str, file.tellp());
 }
 
 BenchmarkStats compute_benchmark_stats(
@@ -245,7 +351,7 @@ void generate_codspeed_walltime_report(
     codspeed_walltime_benchmarks.push_back(codspeed_benchmark);
   }
 
-  write_codspeed_benchmarks_to_json(codspeed_walltime_benchmarks);
+  append_codspeed_benchmarks_to_json(codspeed_walltime_benchmarks);
 }
 
 }  // namespace codspeed
