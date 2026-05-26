@@ -6,6 +6,7 @@
 #include "codspeed.h"
 #include "string_util.h"
 #include "thread_timer.h"
+#include "thread_manager.h"
 
 namespace benchmark {
 namespace internal {
@@ -95,26 +96,29 @@ BenchmarkInstance::BenchmarkInstance(Benchmark* benchmark, int family_idx,
 #ifdef CODSPEED_ANALYSIS
 State BenchmarkInstance::RunAnalysis(
     codspeed::CodSpeed* codspeed, internal::ThreadTimer* timer,
-    internal::ThreadManager* manager,
+    internal::ThreadManager* manager, int thread_id,
     internal::PerfCountersMeasurement* perf_counters_measurement,
     ProfilerManager* profiler_manager) const {
-  // Do one repetition to avoid flakiness due to inconcistencies in CPU cache
+  // Do one repetition to avoid flakiness due to inconsistencies in CPU cache
   // from execution order
 
   // Only run the warmup in simulation mode. Removing this is a breaking change and has
   // to be properly planned and evaluated.
   if (strcmp(CODSPEED_MODE_DISPLAY, "memory") != 0) {
     internal::ThreadTimer warmup_timer = internal::ThreadTimer::Create();
-    State warmup_state(name_.function_name, 1, args_, 0, 1, &warmup_timer,
+    State warmup_state(name_.function_name, 1, args_, thread_id, threads_, &warmup_timer,
                       manager, perf_counters_measurement, profiler_manager,
                       NULL, /*is_warmup=*/true );
     benchmark_.Run(warmup_state);
   }
 
-  State st(name().str(), 1, args_, 0, 1, timer, manager,
+  State st(name().str(), 1, args_, thread_id, threads_, timer, manager,
            perf_counters_measurement, profiler_manager, codspeed);
   ;
   benchmark_.Run(st);
+
+  manager->NotifyThreadComplete();
+
   return st;
 }
 #endif

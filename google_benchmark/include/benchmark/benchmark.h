@@ -1080,7 +1080,7 @@ struct State::StateIterator {
     parent_->FinishKeepRunning();
 
 #ifdef CODSPEED_ANALYSIS
-    if (parent_->codspeed_ != NULL) {
+    if (parent_->codspeed_ != NULL && parent_->thread_index() == 0) {
       parent_->codspeed_->end_benchmark();
     }
 #endif

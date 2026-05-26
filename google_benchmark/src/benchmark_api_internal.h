@@ -60,7 +60,7 @@ class BenchmarkInstance {
 #ifdef CODSPEED_ANALYSIS
   State RunAnalysis(
       codspeed::CodSpeed* codspeed, internal::ThreadTimer* timer,
-      internal::ThreadManager* manager,
+      internal::ThreadManager* manager, int thread_id,
       internal::PerfCountersMeasurement* perf_counters_measurement,
       ProfilerManager* profiler_manager) const;
 #endif

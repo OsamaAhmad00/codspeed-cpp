@@ -467,10 +467,32 @@ void BenchmarkRunner::DoOneRepetition() {
 #ifdef CODSPEED_ANALYSIS
   std::unique_ptr<internal::ThreadManager> manager;
   manager.reset(new internal::ThreadManager(b.threads()));
-  internal::ThreadTimer timer = internal::ThreadTimer::Create();
+
   b.Setup();
-  State st = b.RunAnalysis(codspeed::CodSpeed::getInstance(), &timer,
-                           manager.get(), nullptr, nullptr);
+
+  for (std::size_t ti = 0; ti < pool.size(); ++ti) {
+    pool[ti] = std::thread([this, &manager, ti] {
+      internal::ThreadTimer timer = internal::ThreadTimer::Create();
+      b.RunAnalysis(
+        codspeed::CodSpeed::getInstance(),
+        &timer,
+        manager.get(),
+        static_cast<int>(ti + 1),
+        nullptr,
+        nullptr
+      );
+    });
+  }
+
+  internal::ThreadTimer timer = internal::ThreadTimer::Create();
+  b.RunAnalysis(codspeed::CodSpeed::getInstance(), &timer,
+                           manager.get(), 0, nullptr, nullptr);
+
+  manager->WaitForAllThreads();
+  for (std::thread& thread : pool) {
+    thread.join();
+  }
+
   b.Teardown();
 
   return;
